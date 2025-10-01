@@ -77,12 +77,13 @@ def find_manual(story_path: Path) -> Optional[Path]:
     return None
 
 
-def wrap_and_echo(text: str) -> None:
+def wrap_and_echo(text: str, dim: bool = False) -> None:
     """
     Wrap text to terminal width and echo it using Click.
 
     Args:
         text: Text to wrap and display
+        dim: Whether to display text dimmed
     """
     # Get terminal width
     import shutil
@@ -93,7 +94,10 @@ def wrap_and_echo(text: str) -> None:
 
     # Use Click's wrap_text function
     wrapped = click.wrap_text(text, width=width, preserve_paragraphs=True)
-    click.echo(wrapped)
+    if dim:
+        click.secho(wrapped, dim=True)
+    else:
+        click.echo(wrapped)
 
 
 def save_checkpoint(
@@ -307,16 +311,16 @@ def main(
                         if thinking_parts:
                             for part in thinking_parts:
                                 content = part.content.strip()
-                                click.echo("<reasoning>")
-                                wrap_and_echo(content)
-                                click.echo("</reasoning>\n")
+                                click.secho("<reasoning>", dim=True)
+                                wrap_and_echo(content, dim=True)
+                                click.secho("</reasoning>\n", dim=True)
 
                     # Display <planning> tags from text output
                     thinking = extract_thinking(model_output)
                     if thinking:
-                        click.echo("<planning>")
-                        wrap_and_echo(thinking)
-                        click.echo("</planning>\n")
+                        click.secho("<planning>", dim=True)
+                        wrap_and_echo(thinking, dim=True)
+                        click.secho("</planning>\n", dim=True)
 
                     # Strip thinking tags to get just the command
                     command = strip_thinking_tags(model_output)
