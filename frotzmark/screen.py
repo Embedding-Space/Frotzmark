@@ -29,6 +29,7 @@ class ProgrammaticScreen:
         self.output_buffer = []
         self.command_queue = []
         self.waiting_for_input = False
+        self.commands_dispensed = 0  # Track commands given out this turn
 
     def queue_command(self, command: str):
         """
@@ -65,29 +66,32 @@ class ProgrammaticScreen:
         Called by the game when it needs input.
 
         Instead of blocking on stdin, pulls from the command queue.
-        If no commands are queued, raises StopIteration to signal
-        that we're waiting for input.
+        If no commands are queued, returns empty string (which the game
+        will reject and ask again).
 
         Args:
             prompt: Optional prompt to display (written to output)
-            prefilled: Pre-filled text (rarely used in IF games)
+            prefilled: Pre-filled text (may contain leftover text from buffer)
 
         Returns:
-            The next command from the queue
-
-        Raises:
-            StopIteration: When no commands are queued (signals pause point)
+            The next command from the queue, or empty string if queue is empty
         """
         if prompt:
             self.write(prompt)
 
         if not self.command_queue:
             self.waiting_for_input = True
+            # Always raise StopIteration when we have no commands
+            # This prevents the game from processing empty input at any point
             raise StopIteration("Waiting for input")
 
         command = self.command_queue.pop(0)
-        # Echo the command to output (like a real terminal would)
-        self.write(command + '\n')
+        self.waiting_for_input = False
+        self.commands_dispensed += 1  # Increment counter
+
+        # Don't echo the command ourselves - the game handles that via
+        # its own input buffering/display mechanism
+
         return command
 
     # No-op methods required by xyppy's screen interface

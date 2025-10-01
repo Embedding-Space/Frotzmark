@@ -84,12 +84,17 @@ class GameSession:
 
         self._started = True
 
-        # Run until we hit an input request
+        # Run until the screen signals it's waiting for input
         try:
-            while True:
+            while not self.screen.waiting_for_input:
+                prev_pc = self.env.pc  # Save PC before step
                 zenv.step(self.env)
+            return self.screen.get_output()
         except StopIteration:
-            # Game is waiting for input
+            # Restore PC so the READ instruction will be re-executed
+            # when we resume (instead of being skipped)
+            if self.screen.waiting_for_input:
+                self.env.pc = prev_pc
             return self.screen.get_output()
 
     def send_command(self, command: str) -> str:
@@ -111,16 +116,21 @@ class GameSession:
         if self._finished:
             raise RuntimeError("Game has finished")
 
-        # Queue the command
+        # Queue the command and reset the counter
         self.screen.queue_command(command)
+        self.screen.commands_dispensed = 0
         self._turn_count += 1
 
-        # Resume execution until next input request
+        # Resume execution until StopIteration (command processed) or SystemExit (game quit)
         try:
             while True:
+                prev_pc = self.env.pc  # Save PC before step
                 zenv.step(self.env)
         except StopIteration:
-            # Game is waiting for input
+            # Restore PC so the READ instruction will be re-executed
+            # when we resume (instead of being skipped)
+            if self.screen.waiting_for_input:
+                self.env.pc = prev_pc
             return self.screen.get_output()
         except SystemExit:
             # Game has quit

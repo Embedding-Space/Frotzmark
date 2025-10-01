@@ -699,21 +699,28 @@ def check_arg_count(env, opinfo):
         warn('    result', result)
 
 def handle_read(env, text_buffer, parse_buffer, time=0, routine=0):
+    import traceback
+    print(f"\n[HANDLE_READ CALLED]")
+    print(f"  Call stack: {[frame.name for frame in traceback.extract_stack()[-6:-1]]}")
 
     if time != 0 or routine != 0:
         if DBG:
             err('interrupts requested but not impl\'d yet!')
 
     prefilled = get_text_buffer_as_str(env, text_buffer)
+    print(f"  prefilled from buffer: {repr(prefilled)}")
+
     user_input = ascii_to_zscii(env.screen.get_line_of_input(prompt='', prefilled=prefilled).lower())
+    print(f"[HANDLE_READ] got user_input: {repr(user_input)}")
 
     fill_text_buffer(env, user_input, text_buffer)
 
     if env.hdr.version < 5 or parse_buffer != 0:
         handle_parse(env, text_buffer, parse_buffer)
+        print(f"[HANDLE_READ] parsed command")
 
-    # return ord('\r') as term char for now... 
-    # TODO: the right thing 
+    # return ord('\r') as term char for now...
+    # TODO: the right thing
     return ord('\r')
 
 def aread(env, opinfo):

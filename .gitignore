@@ -16,7 +16,8 @@ wheels/
 .mcp.json
 
 # Games
-games/
+games/*.z?
+games/*.md
 
 # Docs for now
 docs/
