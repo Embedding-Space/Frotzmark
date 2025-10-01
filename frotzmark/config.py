@@ -1,5 +1,9 @@
 """
 Configuration loading from environment variables.
+
+This module handles settings that come from environment variables only.
+CLI-configurable settings (story file, manual file, model, seed) are
+handled by the CLI layer.
 """
 
 import os
@@ -9,7 +13,14 @@ from dotenv import load_dotenv
 # Load .env file from project root
 load_dotenv()
 
-# API Configuration
+# Path constants
+PROJECT_ROOT = Path(__file__).parent.parent
+PROMPT_DIR = Path(__file__).parent / "prompts"
+
+# =============================================================================
+# Environment-only settings (security-sensitive, not exposed via CLI)
+# =============================================================================
+
 API_KEY = os.getenv("API_KEY")
 if not API_KEY:
     raise ValueError("API_KEY must be set in .env file")
@@ -18,42 +29,26 @@ if not API_KEY:
 PROVIDER_TYPE = os.getenv("PROVIDER_TYPE", "openrouter")
 BASE_URL = os.getenv("BASE_URL", "https://openrouter.ai/api/v1")
 
-# Model selection
-MODEL_NAME = os.getenv("MODEL_NAME")
-if not MODEL_NAME:
-    raise ValueError("MODEL_NAME must be set in .env file")
-
-# Game configuration
-STORY_FILE = os.getenv("STORY_FILE")
-if not STORY_FILE:
-    raise ValueError("STORY_FILE must be set in .env file (path to .z3/.z5/.z8 game file)")
-
-MANUAL_FILE = os.getenv("MANUAL_FILE")
-if not MANUAL_FILE:
-    raise ValueError("MANUAL_FILE must be set in .env file (path to game manual markdown)")
-
-# Optional: Random seed for reproducibility
-RANDOM_SEED = int(os.getenv("RANDOM_SEED", "0"))
-
 # Optional: Logfire configuration for observability
 LOGFIRE_TOKEN = os.getenv("LOGFIRE_TOKEN")
 
-# Path constants
-PROJECT_ROOT = Path(__file__).parent.parent
-PROMPT_DIR = Path(__file__).parent / "prompts"
+# =============================================================================
+# CLI-configurable settings (with env var fallbacks)
+# These are exported but not validated here - the CLI layer handles them
+# =============================================================================
 
-# Resolve story and manual paths (support both absolute and relative)
-STORY_PATH = Path(STORY_FILE)
-if not STORY_PATH.is_absolute():
-    STORY_PATH = PROJECT_ROOT / STORY_FILE
+def get_model_name() -> str:
+    """Get model name from env var, or None if not set."""
+    return os.getenv("MODEL_NAME")
 
-MANUAL_PATH = Path(MANUAL_FILE)
-if not MANUAL_PATH.is_absolute():
-    MANUAL_PATH = PROJECT_ROOT / MANUAL_FILE
+def get_random_seed() -> int:
+    """Get random seed from env var, defaults to 0."""
+    return int(os.getenv("RANDOM_SEED", "0"))
 
-# Validation
-if not STORY_PATH.exists():
-    raise ValueError(f"Story file not found: {STORY_PATH}")
+def get_story_file() -> str:
+    """Get story file path from env var, or None if not set."""
+    return os.getenv("STORY_FILE")
 
-if not MANUAL_PATH.exists():
-    raise ValueError(f"Manual file not found: {MANUAL_PATH}")
+def get_manual_file() -> str:
+    """Get manual file path from env var, or None if not set."""
+    return os.getenv("MANUAL_FILE")

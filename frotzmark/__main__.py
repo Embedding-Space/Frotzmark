@@ -5,7 +5,10 @@ Main entry point for Frotzmark.
 import sys
 import signal
 import re
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
+
+import click
 
 try:
     import logfire
@@ -17,15 +20,14 @@ from .agent import create_agent
 from .game_session import GameSession
 from .config import (
     LOGFIRE_TOKEN,
-    MODEL_NAME,
-    STORY_PATH,
-    RANDOM_SEED
+    get_model_name,
+    get_random_seed,
 )
 
 
 def signal_handler(sig: int, frame: Any) -> None:
     """Handle Ctrl-C gracefully."""
-    print("\n\nFrotzmark session ended.")
+    click.echo("\n\nFrotzmark session ended.")
     sys.exit(0)
 
 
@@ -53,20 +55,124 @@ def extract_thinking(text: str) -> str:
     return ""
 
 
-def main() -> None:
-    """Main Frotzmark loop."""
+def find_manual(story_path: Path) -> Optional[Path]:
+    """
+    Auto-discover manual file next to story file.
+
+    Looks for a .md file with the same name as the story file.
+    E.g., zork1.z5 → zork1.md
+
+    Args:
+        story_path: Path to the story file
+
+    Returns:
+        Path to manual file if found, None otherwise
+    """
+    manual_path = story_path.with_suffix('.md')
+    if manual_path.exists():
+        return manual_path
+    return None
+
+
+def wrap_text(text: str, width: Optional[int] = None) -> str:
+    """
+    Wrap text to terminal width for better readability.
+
+    Args:
+        text: Text to wrap
+        width: Terminal width (auto-detected if None)
+
+    Returns:
+        Wrapped text
+    """
+    if width is None:
+        try:
+            width, _ = click.get_terminal_size()  # type: ignore
+        except:
+            width = 80  # fallback
+
+    # Don't wrap if text is already short enough
+    if len(text) <= width:
+        return text
+
+    # Simple word-wrapping (doesn't break words)
+    lines = []
+    for paragraph in text.split('\n'):
+        if not paragraph.strip():
+            lines.append('')
+            continue
+
+        words = paragraph.split()
+        current_line = []
+        current_length = 0
+
+        for word in words:
+            word_len = len(word) + (1 if current_line else 0)
+            if current_length + word_len <= width:
+                current_line.append(word)
+                current_length += word_len
+            else:
+                if current_line:
+                    lines.append(' '.join(current_line))
+                current_line = [word]
+                current_length = len(word)
+
+        if current_line:
+            lines.append(' '.join(current_line))
+
+    return '\n'.join(lines)
+
+
+@click.command()
+@click.argument('story', type=click.Path(exists=True, path_type=Path))
+@click.argument('manual', type=click.Path(exists=True, path_type=Path), required=False)
+@click.option('--model', '-m', help='Model to use (e.g., google/gemini-2.5-flash-lite)')
+@click.option('--seed', '-s', type=int, help='Random seed for reproducibility')
+@click.option('--wrap/--no-wrap', default=True, help='Wrap output to terminal width')
+def main(
+    story: Path,
+    manual: Optional[Path],
+    model: Optional[str],
+    seed: Optional[int],
+    wrap: bool,
+) -> None:
+    """
+    Frotzmark: LLMs vs Interactive Fiction
+
+    STORY: Path to Z-machine story file (.z3, .z5, .z8)
+
+    MANUAL: Path to game manual (markdown). If omitted, Frotzmark will
+    look for a .md file with the same name as the story file.
+    """
 
     # Set up signal handler for graceful exit
     signal.signal(signal.SIGINT, signal_handler)
 
-    print("🎮 Frotzmark: LLMs vs Interactive Fiction")
-    print(f"Model: {MODEL_NAME}")
-    print(f"Game: {STORY_PATH.name}")
-    print("Press Ctrl-C to exit\n")
+    # Resolve configuration with CLI overrides
+    model_name = model or get_model_name()
+    if not model_name:
+        click.echo("Error: Model must be specified via --model or MODEL_NAME env var", err=True)
+        sys.exit(1)
+
+    random_seed = seed if seed is not None else get_random_seed()
+
+    # Auto-discover manual if not provided
+    if manual is None:
+        manual = find_manual(story)
+        if manual:
+            click.echo(f"📖 Auto-discovered manual: {manual.name}")
+
+    # Display startup info
+    click.echo("🎮 Frotzmark: LLMs vs Interactive Fiction")
+    click.echo(f"Model: {model_name}")
+    click.echo(f"Game: {story.name}")
+    if manual:
+        click.echo(f"Manual: {manual.name}")
+    click.echo("Press Ctrl-C to exit\n")
 
     # Configure Logfire if available and token is set
     if LOGFIRE_AVAILABLE and LOGFIRE_TOKEN:
-        print("Configuring Logfire observability...")
+        click.echo("Configuring Logfire observability...")
         logfire.configure(
             token=LOGFIRE_TOKEN,
             service_name="frotzmark",
@@ -74,20 +180,21 @@ def main() -> None:
         )
         logfire.instrument_pydantic_ai()
         logfire.instrument_httpx()
-        print("Logfire instrumentation enabled.\n")
+        click.echo("Logfire instrumentation enabled.\n")
 
     try:
         # Initialize game session and agent
-        print("Initializing game...")
-        session = GameSession(str(STORY_PATH), random_seed=RANDOM_SEED)
-        agent = create_agent()
+        click.echo("Initializing game...")
+        session = GameSession(str(story), random_seed=random_seed)
+        agent = create_agent(model_name, manual_path=manual if manual else None)
 
-        print("Starting game...\n")
+        click.echo("Starting game...\n")
 
         # Start the game and get initial output
         game_output = session.start()
-        print(game_output)
-        print()
+        output_text = wrap_text(game_output) if wrap else game_output
+        click.echo(output_text)
+        click.echo()
 
         # Message history for conversation context
         message_history = []
@@ -95,7 +202,7 @@ def main() -> None:
 
         # Main game loop
         span_context = (
-            logfire.span('frotzmark_game_session', model=MODEL_NAME)
+            logfire.span('frotzmark_game_session', model=model_name)
             if LOGFIRE_AVAILABLE and LOGFIRE_TOKEN
             else None
         )
@@ -114,29 +221,36 @@ def main() -> None:
                     # Extract and display thinking
                     thinking = extract_thinking(model_output)
                     if thinking:
-                        print(f"<thinking>\n{thinking}\n</thinking>\n")
+                        thinking_text = wrap_text(thinking) if wrap else thinking
+                        click.echo(f"<thinking>\n{thinking_text}\n</thinking>\n")
 
                     # Strip thinking tags to get just the command
                     command = strip_thinking_tags(model_output)
 
                     if not command:
-                        print("[Game ended - no command provided]")
+                        click.echo("[Game ended - no command provided]")
                         break
 
                     # Execute the command
-                    print(f">{command}")
+                    click.echo(f">{command}")
                     game_output = session.send_command(command)
-                    print(game_output)
-                    print()
+                    output_text = wrap_text(game_output) if wrap else game_output
+                    click.echo(output_text)
+                    click.echo()
+
+                    # Display turn count
+                    click.secho(f"[Turn {turn_number}]", fg='cyan', dim=True)
+                    click.echo()
 
                     # Update message history for next turn
                     message_history = result.all_messages()
 
             except KeyboardInterrupt:
-                print("\n\nFrotzmark session ended.")
+                click.echo("\n\nFrotzmark session ended.")
                 # Exit cleanly from the span without re-raising
+
     except Exception as e:
-        print(f"\nError: {e}")
+        click.echo(f"\nError: {e}", err=True)
         import traceback
         traceback.print_exc()
         sys.exit(1)
