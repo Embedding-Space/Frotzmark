@@ -7,7 +7,7 @@ configured to use other providers via environment variables.
 
 from pathlib import Path
 from typing import Optional
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelSettings
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from .config import (
@@ -49,7 +49,11 @@ def load_system_prompt(manual_path: Optional[Path] = None) -> str:
     return "\n\n".join(parts)
 
 
-def create_agent(model_name: str, manual_path: Optional[Path] = None) -> Agent:
+def create_agent(
+    model_name: str,
+    manual_path: Optional[Path] = None,
+    reasoning_effort: Optional[str] = None
+) -> Agent:
     """
     Create and configure the PydanticAI agent.
 
@@ -60,6 +64,7 @@ def create_agent(model_name: str, manual_path: Optional[Path] = None) -> Agent:
     Args:
         model_name: Name of the model to use (e.g., 'google/gemini-2.5-flash-lite')
         manual_path: Path to game manual markdown file (optional)
+        reasoning_effort: Reasoning effort level for OpenRouter ('low', 'medium', 'high') (optional)
     """
 
     if PROVIDER_TYPE == "openrouter":
@@ -81,9 +86,22 @@ def create_agent(model_name: str, manual_path: Optional[Path] = None) -> Agent:
 
     system_prompt = load_system_prompt(manual_path)
 
+    # Configure model settings with reasoning if requested
+    model_settings = None
+    if reasoning_effort and PROVIDER_TYPE == "openrouter":
+        model_settings = ModelSettings(
+            extra_body={
+                'reasoning': {
+                    'effort': reasoning_effort,
+                    'exclude': False  # Include reasoning output in response
+                }
+            }
+        )
+
     agent = Agent(
         model=model,
-        system_prompt=system_prompt
+        system_prompt=system_prompt,
+        model_settings=model_settings
     )
 
     return agent

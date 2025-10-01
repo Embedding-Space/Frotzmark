@@ -36,12 +36,12 @@ def signal_handler(sig: int, frame: Any) -> None:
 
 def strip_thinking_tags(text: str) -> str:
     """
-    Remove <thinking>...</thinking> tags and their contents from text.
+    Remove <planning>...</planning> tags and their contents from text.
 
     Returns only the command that should be sent to the game.
     """
     # Remove thinking tags and everything between them
-    cleaned = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL)
+    cleaned = re.sub(r'<planning>.*?</planning>', '', text, flags=re.DOTALL)
     # Strip whitespace
     cleaned = cleaned.strip()
     # If there are multiple lines, take only the first one
@@ -51,8 +51,8 @@ def strip_thinking_tags(text: str) -> str:
 
 
 def extract_thinking(text: str) -> str:
-    """Extract the content inside <thinking> tags."""
-    match = re.search(r'<thinking>(.*?)</thinking>', text, re.DOTALL)
+    """Extract the content inside <planning> tags."""
+    match = re.search(r'<planning>(.*?)</planning>', text, re.DOTALL)
     if match:
         return match.group(1).strip()
     return ""
@@ -77,53 +77,23 @@ def find_manual(story_path: Path) -> Optional[Path]:
     return None
 
 
-def wrap_text(text: str, width: Optional[int] = None) -> str:
+def wrap_and_echo(text: str) -> None:
     """
-    Wrap text to terminal width for better readability.
+    Wrap text to terminal width and echo it using Click.
 
     Args:
-        text: Text to wrap
-        width: Terminal width (auto-detected if None)
-
-    Returns:
-        Wrapped text
+        text: Text to wrap and display
     """
-    if width is None:
-        try:
-            width, _ = click.get_terminal_size()  # type: ignore
-        except:
-            width = 80  # fallback
+    # Get terminal width
+    import shutil
+    try:
+        width = shutil.get_terminal_size().columns
+    except:
+        width = 80  # fallback
 
-    # Don't wrap if text is already short enough
-    if len(text) <= width:
-        return text
-
-    # Simple word-wrapping (doesn't break words)
-    lines = []
-    for paragraph in text.split('\n'):
-        if not paragraph.strip():
-            lines.append('')
-            continue
-
-        words = paragraph.split()
-        current_line = []
-        current_length = 0
-
-        for word in words:
-            word_len = len(word) + (1 if current_line else 0)
-            if current_length + word_len <= width:
-                current_line.append(word)
-                current_length += word_len
-            else:
-                if current_line:
-                    lines.append(' '.join(current_line))
-                current_line = [word]
-                current_length = len(word)
-
-        if current_line:
-            lines.append(' '.join(current_line))
-
-    return '\n'.join(lines)
+    # Use Click's wrap_text function
+    wrapped = click.wrap_text(text, width=width, preserve_paragraphs=True)
+    click.echo(wrapped)
 
 
 def save_checkpoint(
@@ -183,17 +153,17 @@ def load_checkpoint(checkpoint_path: Path) -> Optional[dict]:
 @click.argument('manual', type=click.Path(exists=True, path_type=Path), required=False)
 @click.option('--model', '-m', help='Model to use (e.g., google/gemini-2.5-flash-lite)')
 @click.option('--seed', '-s', type=int, help='Random seed for reproducibility')
-@click.option('--wrap/--no-wrap', default=True, help='Wrap output to terminal width')
 @click.option('--resume', '-r', 'resume_file', type=click.Path(exists=True, path_type=Path), help='Resume from checkpoint file')
 @click.option('--checkpoint', '-c', 'checkpoint_file', type=click.Path(path_type=Path), default='checkpoint.json', help='Checkpoint file path (default: checkpoint.json)')
+@click.option('--reasoning', type=click.Choice(['low', 'medium', 'high']), help='Enable reasoning tokens (OpenRouter only): low, medium, or high effort')
 def main(
     story: Optional[Path],
     manual: Optional[Path],
     model: Optional[str],
     seed: Optional[int],
-    wrap: bool,
     resume_file: Optional[Path],
     checkpoint_file: Path,
+    reasoning: Optional[str],
 ) -> None:
     """
     Frotzmark: LLMs vs Interactive Fiction
@@ -270,7 +240,11 @@ def main(
         # Initialize game session and agent
         click.echo("Initializing game...")
         session = GameSession(str(story), random_seed=random_seed)
-        agent = create_agent(model_name, manual_path=manual if manual else None)
+        agent = create_agent(
+            model_name,
+            manual_path=manual if manual else None,
+            reasoning_effort=reasoning
+        )
 
         # Handle checkpoint restore or fresh start
         if checkpoint_data:
@@ -290,8 +264,7 @@ def main(
             game_output = checkpoint_data['next_prompt']
 
             click.echo(f"Resumed at turn {turn_number}\n")
-            output_text = wrap_text(game_output) if wrap else game_output
-            click.echo(output_text)
+            wrap_and_echo(game_output)
             click.echo()
         else:
             # Fresh start
@@ -299,8 +272,7 @@ def main(
 
             # Start the game and get initial output
             game_output = session.start()
-            output_text = wrap_text(game_output) if wrap else game_output
-            click.echo(output_text)
+            wrap_and_echo(game_output)
             click.echo()
 
             # Message history for conversation context
@@ -325,11 +297,26 @@ def main(
                     # Get the model's full output
                     model_output = result.output
 
-                    # Extract and display thinking
+                    # Extract and display thinking/reasoning content
+                    from pydantic_ai.messages import ModelResponse, ThinkingPart
+                    last_message = result.all_messages()[-1]
+
+                    # Display reasoning tokens if present
+                    if isinstance(last_message, ModelResponse):
+                        thinking_parts = [p for p in last_message.parts if isinstance(p, ThinkingPart)]
+                        if thinking_parts:
+                            for part in thinking_parts:
+                                content = part.content.strip()
+                                click.echo("<reasoning>")
+                                wrap_and_echo(content)
+                                click.echo("</reasoning>\n")
+
+                    # Display <planning> tags from text output
                     thinking = extract_thinking(model_output)
                     if thinking:
-                        thinking_text = wrap_text(thinking) if wrap else thinking
-                        click.echo(f"<thinking>\n{thinking_text}\n</thinking>\n")
+                        click.echo("<planning>")
+                        wrap_and_echo(thinking)
+                        click.echo("</planning>\n")
 
                     # Strip thinking tags to get just the command
                     command = strip_thinking_tags(model_output)
@@ -341,8 +328,7 @@ def main(
                     # Execute the command
                     click.echo(f">{command}")
                     game_output = session.send_command(command)
-                    output_text = wrap_text(game_output) if wrap else game_output
-                    click.echo(output_text)
+                    wrap_and_echo(game_output)
                     click.echo()
 
                     # Display turn count

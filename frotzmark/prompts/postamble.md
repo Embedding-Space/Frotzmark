@@ -6,15 +6,15 @@ Your goal is to maximize your score by exploring the game world, solving puzzles
 
 **How to respond:**
 
-1. Use `<thinking>` tags to plan your strategy and reason about the game state
+1. Use `<planning>` tags to plan your strategy and reason about the game state
 2. After your thinking, write ONLY the command you want to send to the game
 3. Do not narrate or describe what you expect to happen - the game will tell you
 
 Your entire response should look like:
 ```
-<thinking>
+<planning>
 [Your reasoning and planning here]
-</thinking>
+</planning>
 [single game command here]
 ```
 
