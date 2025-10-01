@@ -21,3 +21,9 @@ wheels/
 # Games
 games/*.z?
 games/*.md
+
+# Checkpoints
+checkpoint.json
+checkpoint.sav
+*.checkpoint.json
+*.checkpoint.sav

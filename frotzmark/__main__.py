@@ -5,10 +5,13 @@ Main entry point for Frotzmark.
 import sys
 import signal
 import re
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import click
+from pydantic_core import to_json, to_jsonable_python
 
 try:
     import logfire
@@ -123,44 +126,125 @@ def wrap_text(text: str, width: Optional[int] = None) -> str:
     return '\n'.join(lines)
 
 
+def save_checkpoint(
+    checkpoint_path: Path,
+    turn: int,
+    message_history: list,
+    next_prompt: str,
+    model_name: str,
+    story_path: Path,
+) -> None:
+    """
+    Save a checkpoint to resume later.
+
+    Creates two files:
+    - checkpoint.json: Metadata and message history
+    - checkpoint.sav: Z-machine game state (Quetzal format)
+    """
+    # Save game state to Quetzal file
+    save_file = checkpoint_path.with_suffix('.sav')
+
+    # Serialize message history
+    serialized_history = to_jsonable_python(message_history)
+
+    # Create checkpoint metadata
+    checkpoint_data = {
+        'version': '1.0',
+        'timestamp': datetime.now().isoformat(),
+        'turn': turn,
+        'model': model_name,
+        'story_file': str(story_path),
+        'save_file': str(save_file),
+        'next_prompt': next_prompt,
+        'message_history': serialized_history,
+    }
+
+    # Write checkpoint JSON
+    with open(checkpoint_path, 'w') as f:
+        json.dump(checkpoint_data, f, indent=2)
+
+
+def load_checkpoint(checkpoint_path: Path) -> Optional[dict]:
+    """
+    Load a checkpoint file.
+
+    Returns:
+        Checkpoint data dict, or None if file doesn't exist
+    """
+    if not checkpoint_path.exists():
+        return None
+
+    with open(checkpoint_path, 'r') as f:
+        return json.load(f)
+
+
 @click.command()
-@click.argument('story', type=click.Path(exists=True, path_type=Path))
+@click.argument('story', type=click.Path(exists=True, path_type=Path), required=False)
 @click.argument('manual', type=click.Path(exists=True, path_type=Path), required=False)
 @click.option('--model', '-m', help='Model to use (e.g., google/gemini-2.5-flash-lite)')
 @click.option('--seed', '-s', type=int, help='Random seed for reproducibility')
 @click.option('--wrap/--no-wrap', default=True, help='Wrap output to terminal width')
+@click.option('--resume', '-r', 'resume_file', type=click.Path(exists=True, path_type=Path), help='Resume from checkpoint file')
+@click.option('--checkpoint', '-c', 'checkpoint_file', type=click.Path(path_type=Path), default='checkpoint.json', help='Checkpoint file path (default: checkpoint.json)')
 def main(
-    story: Path,
+    story: Optional[Path],
     manual: Optional[Path],
     model: Optional[str],
     seed: Optional[int],
     wrap: bool,
+    resume_file: Optional[Path],
+    checkpoint_file: Path,
 ) -> None:
     """
     Frotzmark: LLMs vs Interactive Fiction
 
-    STORY: Path to Z-machine story file (.z3, .z5, .z8)
+    STORY: Path to Z-machine story file (.z3, .z5, .z8) [required unless --resume]
 
     MANUAL: Path to game manual (markdown). If omitted, Frotzmark will
     look for a .md file with the same name as the story file.
+
+    Use --resume to continue from a checkpoint.
     """
 
     # Set up signal handler for graceful exit
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Resolve configuration with CLI overrides
-    model_name = model or get_model_name()
-    if not model_name:
-        click.echo("Error: Model must be specified via --model or MODEL_NAME env var", err=True)
-        sys.exit(1)
+    # Handle resume mode
+    checkpoint_data = None
+    if resume_file:
+        click.echo(f"📂 Resuming from checkpoint: {resume_file.name}\n")
+        checkpoint_data = load_checkpoint(resume_file)
+        if not checkpoint_data:
+            click.echo("Error: Could not load checkpoint file", err=True)
+            sys.exit(1)
 
-    random_seed = seed if seed is not None else get_random_seed()
+        # Override story and model from checkpoint
+        story = Path(checkpoint_data['story_file'])
+        model_name = checkpoint_data['model']
+        random_seed = seed if seed is not None else get_random_seed()
 
-    # Auto-discover manual if not provided
-    if manual is None:
-        manual = find_manual(story)
-        if manual:
-            click.echo(f"📖 Auto-discovered manual: {manual.name}")
+        # Manual still needs to be discovered/specified
+        if manual is None:
+            manual = find_manual(story)
+    else:
+        # Normal mode - story is required
+        if story is None:
+            click.echo("Error: STORY argument required (unless using --resume)", err=True)
+            sys.exit(1)
+
+        # Resolve configuration with CLI overrides
+        model_name = model or get_model_name()
+        if not model_name:
+            click.echo("Error: Model must be specified via --model or MODEL_NAME env var", err=True)
+            sys.exit(1)
+
+        random_seed = seed if seed is not None else get_random_seed()
+
+        # Auto-discover manual if not provided
+        if manual is None:
+            manual = find_manual(story)
+            if manual:
+                click.echo(f"📖 Auto-discovered manual: {manual.name}")
 
     # Display startup info
     click.echo("🎮 Frotzmark: LLMs vs Interactive Fiction")
@@ -188,17 +272,40 @@ def main(
         session = GameSession(str(story), random_seed=random_seed)
         agent = create_agent(model_name, manual_path=manual if manual else None)
 
-        click.echo("Starting game...\n")
+        # Handle checkpoint restore or fresh start
+        if checkpoint_data:
+            # Restore from checkpoint
+            from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-        # Start the game and get initial output
-        game_output = session.start()
-        output_text = wrap_text(game_output) if wrap else game_output
-        click.echo(output_text)
-        click.echo()
+            save_file = Path(checkpoint_data['save_file'])
+            if not session.restore_state(str(save_file)):
+                click.echo("Error: Failed to restore game state", err=True)
+                sys.exit(1)
 
-        # Message history for conversation context
-        message_history = []
-        turn_number = 0
+            # Restore message history
+            message_history = ModelMessagesTypeAdapter.validate_python(
+                checkpoint_data['message_history']
+            )
+            turn_number = checkpoint_data['turn']
+            game_output = checkpoint_data['next_prompt']
+
+            click.echo(f"Resumed at turn {turn_number}\n")
+            output_text = wrap_text(game_output) if wrap else game_output
+            click.echo(output_text)
+            click.echo()
+        else:
+            # Fresh start
+            click.echo("Starting game...\n")
+
+            # Start the game and get initial output
+            game_output = session.start()
+            output_text = wrap_text(game_output) if wrap else game_output
+            click.echo(output_text)
+            click.echo()
+
+            # Message history for conversation context
+            message_history = []
+            turn_number = 0
 
         # Main game loop
         span_context = (
@@ -244,6 +351,17 @@ def main(
 
                     # Update message history for next turn
                     message_history = result.all_messages()
+
+                    # Save checkpoint after each turn
+                    session.save_state(str(checkpoint_file.with_suffix('.sav')))
+                    save_checkpoint(
+                        checkpoint_path=checkpoint_file,
+                        turn=turn_number,
+                        message_history=message_history,
+                        next_prompt=game_output,
+                        model_name=model_name,
+                        story_path=story,
+                    )
 
             except KeyboardInterrupt:
                 click.echo("\n\nFrotzmark session ended.")

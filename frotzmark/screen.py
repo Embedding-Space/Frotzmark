@@ -113,3 +113,11 @@ class ProgrammaticScreen:
     def update_seen_lines(self):
         """No-op for programmatic control."""
         pass
+
+    def msg(self, text: str):
+        """
+        Display a message (used by Quetzal for error messages).
+
+        We write it to the output buffer so it gets captured.
+        """
+        self.write(text)

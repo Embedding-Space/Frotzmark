@@ -16,7 +16,7 @@ from pathlib import Path
 vendor_path = Path(__file__).parent / "vendor"
 sys.path.insert(0, str(vendor_path))
 
-from xyppy import zenv, ops
+from xyppy import zenv, ops, quetzal, ops_impl
 
 from .screen import ProgrammaticScreen
 
@@ -174,3 +174,68 @@ class GameSession:
             The current PC value
         """
         return self.env.pc
+
+    def save_state(self, save_path: str) -> bool:
+        """
+        Save the current game state to a Quetzal save file.
+
+        This creates a standard Z-machine save file that can be restored
+        later to resume from this exact point in the game.
+
+        Args:
+            save_path: Path to save the state file (.sav extension will be added if missing)
+
+        Returns:
+            True if save succeeded, False otherwise
+        """
+        return quetzal.write(self.env, save_path)
+
+    def restore_state(self, save_path: str) -> bool:
+        """
+        Restore game state from a Quetzal save file.
+
+        This loads a previously saved state, allowing you to resume from
+        that exact point in the game. After restoring, the game will be
+        in the "started" state and ready to accept commands.
+
+        Args:
+            save_path: Path to the save file to restore
+
+        Returns:
+            True if restore succeeded, False otherwise
+
+        Raises:
+            RuntimeError: If called after the game has been started
+        """
+        if self._started:
+            raise RuntimeError("Cannot restore state after game has started")
+
+        success = quetzal.load_to_env(self.env, save_path)
+        if success:
+            self._started = True
+
+            # quetzal.load_to_env() calls env.reset(), which re-initializes
+            # the environment and replaces our screen. Re-attach our screen.
+            self.env.screen = self.screen
+
+            # After restore, PC points at the SAVE instruction.
+            # We need to skip past it and set the return value.
+            # This matches how xyppy's interactive restore works.
+            if self.env.hdr.version < 4:
+                # Z3: Move past the SAVE instruction's branch byte(s)
+                # Branch format bit 6 determines if it's 1 or 2 bytes
+                self.env.pc += 1 if self.env.mem[self.env.pc] & 64 else 2
+                self.env.last_pc_branch_var = self.env.pc
+            else:
+                # Z4+: Set the store variable to 2 (restore success), then skip past it
+                store_var = self.env.mem[self.env.pc]
+                ops_impl.set_var(self.env, store_var, 2)
+                self.env.pc += 1
+                self.env.last_pc_store_var = self.env.pc
+
+            # Reset screen state after restore
+            self.screen.output_buffer.clear()
+            self.screen.command_queue.clear()
+            self.screen.waiting_for_input = True
+            self.screen.commands_dispensed = 0
+        return success
