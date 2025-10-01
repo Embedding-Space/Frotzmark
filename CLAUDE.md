@@ -20,8 +20,14 @@ END LOOP
 ## Technical details
 
 - Use `uv` exclusively
-- Use Sussman's `zvm` to run the game
+- Use vendored `xyppy` to run Z-machine games (see Dependencies below)
 - Use PydanticAI to abstract away all the LLM interface stuff
+
+## Dependencies
+
+### Vendored Code
+
+This project vendors [xyppy](https://github.com/theinternetftw/xyppy), a Python Z-machine interpreter, located in `frotzmark/vendor/xyppy/`. We vendor it (rather than using it as a dependency) to ensure long-term reproducibility of research results. See `frotzmark/vendor/README.md` for details.
 
 ## How it works (from Zorkmark)
 

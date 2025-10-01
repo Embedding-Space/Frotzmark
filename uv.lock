@@ -6,14 +6,3 @@ requires-python = ">=3.11"
 name = "frotzmark"
 version = "0.1.0"
 source = { virtual = "." }
-dependencies = [
-    { name = "zvm" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "zvm", git = "https://github.com/sussman/zvm.git" }]
-
-[[package]]
-name = "zvm"
-version = "1.0.0"
-source = { git = "https://github.com/sussman/zvm.git#10f1086b0718c0143395e8cd1494678679b8fc68" }
