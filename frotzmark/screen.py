@@ -46,10 +46,16 @@ class ProgrammaticScreen:
         Get accumulated output and clear the buffer.
 
         Returns:
-            All text output since the last call to get_output()
+            All text output since the last call to get_output(),
+            with trailing prompt ('>') and whitespace removed.
         """
         result = ''.join(self.output_buffer)
         self.output_buffer.clear()
+
+        # Strip trailing prompt and whitespace for cleaner output
+        result = result.rstrip('\n>')
+        result = result.rstrip()
+
         return result
 
     def write(self, text: str):

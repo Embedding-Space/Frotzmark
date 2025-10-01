@@ -129,10 +129,6 @@ def main() -> None:
                     print(game_output)
                     print()
 
-                    # Display turn count
-                    print(f"[Turn {turn_number}]")
-                    print()
-
                     # Update message history for next turn
                     message_history = result.all_messages()
 
