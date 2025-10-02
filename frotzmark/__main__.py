@@ -81,6 +81,9 @@ def wrap_and_echo(text: str, dim: bool = False) -> None:
     """
     Wrap text to terminal width and echo it using Click.
 
+    Preserves all newlines (both single and double) from the original text,
+    only wrapping long lines to fit terminal width.
+
     Args:
         text: Text to wrap and display
         dim: Whether to display text dimmed
@@ -92,8 +95,17 @@ def wrap_and_echo(text: str, dim: bool = False) -> None:
     except:
         width = 80  # fallback
 
-    # Use Click's wrap_text function
-    wrapped = click.wrap_text(text, width=width, preserve_paragraphs=True)
+    # Split into lines, wrap each line individually, preserving all newlines
+    lines = text.split('\n')
+    wrapped_lines = []
+    for line in lines:
+        if line:  # Non-empty line - wrap it
+            wrapped = click.wrap_text(line, width=width, preserve_paragraphs=False)
+            wrapped_lines.append(wrapped)
+        else:  # Empty line - preserve it
+            wrapped_lines.append('')
+
+    wrapped = '\n'.join(wrapped_lines)
     if dim:
         click.secho(wrapped, dim=True)
     else:
