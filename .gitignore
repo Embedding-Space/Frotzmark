@@ -27,3 +27,6 @@ checkpoint.json
 checkpoint.sav
 *.checkpoint.json
 *.checkpoint.sav
+
+# Transcripts
+transcripts/transcript_*.md

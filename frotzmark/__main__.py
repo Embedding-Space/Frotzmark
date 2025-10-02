@@ -100,6 +100,88 @@ def wrap_and_echo(text: str, dim: bool = False) -> None:
         click.echo(wrapped)
 
 
+def create_transcript(
+    story_path: Path,
+    model_name: str,
+    started_at: datetime,
+) -> Path:
+    """
+    Create a new transcript file with frontmatter.
+
+    Returns:
+        Path to the created transcript file
+    """
+    # Create transcripts directory if it doesn't exist
+    transcripts_dir = Path('transcripts')
+    transcripts_dir.mkdir(exist_ok=True)
+
+    # Generate filename: transcript_YYYY-MM-DD_HHMM_gamename.md
+    timestamp = started_at.strftime('%Y-%m-%d_%H%M')
+    game_name = story_path.stem
+    transcript_path = transcripts_dir / f'transcript_{timestamp}_{game_name}.md'
+
+    # Format started timestamp with numeric timezone offset
+    # e.g., "2025-10-02 09:51:03 -0700"
+    started_str = started_at.strftime('%Y-%m-%d %H:%M:%S %z')
+
+    # Write frontmatter
+    frontmatter = f"""---
+story: "{story_path}"
+model: "{model_name}"
+started: "{started_str}"
+---
+
+"""
+
+    with open(transcript_path, 'w') as f:
+        f.write(frontmatter)
+
+    return transcript_path
+
+
+def append_turn_to_transcript(
+    transcript_path: Path,
+    turn_number: int,
+    game_output: str,
+    reasoning: str,
+    planning: str,
+    command: str,
+) -> None:
+    """
+    Append a turn to the transcript file.
+
+    Args:
+        transcript_path: Path to transcript file
+        turn_number: Current turn number
+        game_output: Game's response text
+        reasoning: Content from <reasoning> tokens (OpenRouter)
+        planning: Content from <planning> tags (model output)
+        command: Command sent to game
+    """
+    with open(transcript_path, 'a') as f:
+        # Turn header
+        f.write(f"## Turn {turn_number}\n\n")
+
+        # Game output
+        f.write(f"{game_output}\n\n")
+
+        # Reasoning section (if present)
+        if reasoning:
+            f.write("<reasoning>\n")
+            f.write(f"{reasoning}\n")
+            f.write("</reasoning>\n\n")
+
+        # Planning section (if present)
+        if planning:
+            f.write("<planning>\n")
+            f.write(f"{planning}\n")
+            f.write("</planning>\n\n")
+
+        # Command
+        f.write(f">{command}\n")
+        f.write("\n")  # Extra newline between turns
+
+
 def save_checkpoint(
     checkpoint_path: Path,
     turn: int,
@@ -107,6 +189,7 @@ def save_checkpoint(
     next_prompt: str,
     model_name: str,
     story_path: Path,
+    transcript_path: Path,
 ) -> None:
     """
     Save a checkpoint to resume later.
@@ -129,6 +212,7 @@ def save_checkpoint(
         'model': model_name,
         'story_file': str(story_path),
         'save_file': str(save_file),
+        'transcript_file': str(transcript_path),
         'next_prompt': next_prompt,
         'message_history': serialized_history,
     }
@@ -267,6 +351,9 @@ def main(
             turn_number = checkpoint_data['turn']
             game_output = checkpoint_data['next_prompt']
 
+            # Restore transcript path
+            transcript_path = Path(checkpoint_data['transcript_file'])
+
             click.echo(f"Resumed at turn {turn_number}\n")
             wrap_and_echo(game_output)
             click.echo()
@@ -282,6 +369,10 @@ def main(
             # Message history for conversation context
             message_history = []
             turn_number = 0
+
+            # Create transcript file
+            session_start = datetime.now().astimezone()
+            transcript_path = create_transcript(story, model_name, session_start)
 
         # Main game loop
         span_context = (
@@ -305,21 +396,25 @@ def main(
                     from pydantic_ai.messages import ModelResponse, ThinkingPart
                     last_message = result.all_messages()[-1]
 
-                    # Display reasoning tokens if present
+                    # Collect reasoning from OpenRouter reasoning tokens
+                    reasoning_content = ""
                     if isinstance(last_message, ModelResponse):
                         thinking_parts = [p for p in last_message.parts if isinstance(p, ThinkingPart)]
                         if thinking_parts:
+                            reasoning_parts = []
                             for part in thinking_parts:
                                 content = part.content.strip()
+                                reasoning_parts.append(content)
                                 click.secho("<reasoning>", dim=True)
                                 wrap_and_echo(content, dim=True)
                                 click.secho("</reasoning>\n", dim=True)
+                            reasoning_content = "\n\n".join(reasoning_parts)
 
-                    # Display <planning> tags from text output
-                    thinking = extract_thinking(model_output)
-                    if thinking:
+                    # Extract <planning> tags from text output
+                    planning_content = extract_thinking(model_output)
+                    if planning_content:
                         click.secho("<planning>", dim=True)
-                        wrap_and_echo(thinking, dim=True)
+                        wrap_and_echo(planning_content, dim=True)
                         click.secho("</planning>\n", dim=True)
 
                     # Strip thinking tags to get just the command
@@ -342,6 +437,16 @@ def main(
                     # Update message history for next turn
                     message_history = result.all_messages()
 
+                    # Append turn to transcript
+                    append_turn_to_transcript(
+                        transcript_path=transcript_path,
+                        turn_number=turn_number,
+                        game_output=game_output,
+                        reasoning=reasoning_content,
+                        planning=planning_content,
+                        command=command,
+                    )
+
                     # Save checkpoint after each turn
                     session.save_state(str(checkpoint_file.with_suffix('.sav')))
                     save_checkpoint(
@@ -351,6 +456,7 @@ def main(
                         next_prompt=game_output,
                         model_name=model_name,
                         story_path=story,
+                        transcript_path=transcript_path,
                     )
 
             except KeyboardInterrupt:
