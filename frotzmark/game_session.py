@@ -239,3 +239,71 @@ class GameSession:
             self.screen.waiting_for_input = True
             self.screen.commands_dispensed = 0
         return success
+
+    def get_score(self) -> dict[str, int | str]:
+        """
+        Get the current score or time from the game.
+
+        In Z-machine Version 3 games, bit 1 of Flags 1 (header byte 0x01)
+        determines the game type:
+        - Bit 1 clear (0): SCORE game - globals hold score and moves
+        - Bit 1 set (1): TIME game - globals hold hours and minutes
+
+        For SCORE games:
+        - Global variable 1 (var 17): Current score
+        - Global variable 2 (var 18): Number of moves/turns
+
+        For TIME games:
+        - Global variable 1 (var 17): Hours (24-hour format)
+        - Global variable 2 (var 18): Minutes
+
+        Returns:
+            Dictionary with keys:
+            - 'type': 'score' or 'time'
+            - 'score': int (for score games)
+            - 'moves': int (for score games)
+            - 'time': str formatted as "H:MM am/pm" (for time games)
+
+        Raises:
+            RuntimeError: If the game hasn't been started yet
+        """
+        if not self._started:
+            raise RuntimeError("Game not started - call start() first")
+
+        # Check Flags 1 bit 1 to determine game type (Version 3 only)
+        flags1 = self.env.mem[0x01]
+        is_time_game = (flags1 & 0x02) != 0
+
+        if is_time_game:
+            # TIME game - read hours and minutes
+            hours = ops_impl.get_var(self.env, 17, pop_stack=False)
+            minutes = ops_impl.get_var(self.env, 18, pop_stack=False)
+
+            # Convert 24-hour to 12-hour format with am/pm
+            am_pm = "am" if hours < 12 else "pm"
+            display_hour = hours % 12
+            if display_hour == 0:
+                display_hour = 12
+
+            time_str = f"{display_hour}:{minutes:02d} {am_pm}"
+
+            return {
+                'type': 'time',
+                'time': time_str
+            }
+        else:
+            # SCORE game - read score and moves
+            score = ops_impl.get_var(self.env, 17, pop_stack=False)
+            moves = ops_impl.get_var(self.env, 18, pop_stack=False)
+
+            # Convert to signed 16-bit integers
+            if score >= 0x8000:
+                score = score - 0x10000
+            if moves >= 0x8000:
+                moves = moves - 0x10000
+
+            return {
+                'type': 'score',
+                'score': score,
+                'moves': moves
+            }

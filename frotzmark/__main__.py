@@ -162,8 +162,8 @@ def append_turn_to_transcript(
         # Turn header
         f.write(f"## Turn {turn_number}\n\n")
 
-        # Game output
-        f.write(f"{game_output}\n\n")
+        # Game output (strip leading/trailing whitespace for clean formatting)
+        f.write(f"{game_output.strip()}\n\n")
 
         # Reasoning section (if present)
         if reasoning:
@@ -244,6 +244,7 @@ def load_checkpoint(checkpoint_path: Path) -> Optional[dict]:
 @click.option('--resume', '-r', 'resume_file', type=click.Path(exists=True, path_type=Path), help='Resume from checkpoint file')
 @click.option('--checkpoint', '-c', 'checkpoint_file', type=click.Path(path_type=Path), default='checkpoint.json', help='Checkpoint file path (default: checkpoint.json)')
 @click.option('--reasoning', type=click.Choice(['low', 'medium', 'high']), help='Enable reasoning tokens (OpenRouter only): low, medium, or high effort')
+@click.option('--show-score', is_flag=True, help='Append score to game output (makes model aware of score changes)')
 def main(
     story: Optional[Path],
     manual: Optional[Path],
@@ -252,6 +253,7 @@ def main(
     resume_file: Optional[Path],
     checkpoint_file: Path,
     reasoning: Optional[str],
+    show_score: bool,
 ) -> None:
     """
     Frotzmark: LLMs vs Interactive Fiction
@@ -371,6 +373,7 @@ def main(
             turn_number = 0
 
             # Create transcript file
+            # Note: Initial game output will be written as part of Turn 1
             session_start = datetime.now().astimezone()
             transcript_path = create_transcript(story, model_name, session_start)
 
@@ -385,6 +388,9 @@ def main(
             try:
                 while not session.is_finished():
                     turn_number += 1
+
+                    # Save what the model sees (for transcript)
+                    turn_prompt = game_output
 
                     # Give the game output to the model as the user prompt
                     result = agent.run_sync(game_output, message_history=message_history)
@@ -427,6 +433,16 @@ def main(
                     # Execute the command
                     click.echo(f">{command}")
                     game_output = session.send_command(command)
+
+                    # Optionally append score/time feedback to game output
+                    # When enabled, the model sees the same status info a human sees
+                    if show_score:
+                        status = session.get_score()
+                        if status['type'] == 'score':
+                            game_output = f"{game_output}\n\n[Score: {status['score']}]"
+                        else:  # time game
+                            game_output = f"{game_output}\n\n[Time: {status['time']}]"
+
                     wrap_and_echo(game_output)
                     click.echo()
 
@@ -438,10 +454,11 @@ def main(
                     message_history = result.all_messages()
 
                     # Append turn to transcript
+                    # Note: turn_prompt is what the model SAW (before command)
                     append_turn_to_transcript(
                         transcript_path=transcript_path,
                         turn_number=turn_number,
-                        game_output=game_output,
+                        game_output=turn_prompt,
                         reasoning=reasoning_content,
                         planning=planning_content,
                         command=command,
